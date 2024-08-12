@@ -1,81 +1,208 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Vault } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
 
-interface MyPluginSettings {
-	mySetting: string;
+interface ObsidianNreplSettings {
+	port: number;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: ObsidianNreplSettings = {
+	port: 64323
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class ObsidianNrepl extends Plugin {
+	settings: ObsidianNreplSettings;
+	_client: any;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		let client:any;
+		let connected:boolean = false;
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
 
-		// This adds a simple command that can be triggered anywhere
+		// // This adds an editor command that can perform some operation on the current editor instance
+		// this.addCommand({
+		// 	id: 'sample-editor-command',
+		// 	name: 'Sample editor command',
+		// 	editorCallback: (editor: Editor, view: MarkdownView) => {
+		// 		console.log(editor.getSelection());
+		// 		editor.replaceSelection('Sample Editor Command');
+		// 	}
+		// });
+		// // This adds a complex command that can check whether the current state of the app allows execution of the command
+
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
+			id: 'chat-doc',
+			name: 'Chat Doc',
 			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+				const file = this.app.workspace.getActiveFile();
+
+				if (! file) {
+					return;
+				}
+
+				const vaultPath = (this.app.vault.adapter as any).basePath;
+				const filePath = file.path;
+				const md = this.app.metadataCache;
+
+				const fm = md.getFileCache(file).frontmatter;
+
+
+				if (fm.sysprompt) {
+					const match = fm.sysprompt.match(/\[\[(.+?)\]\]/);
+					if (match) {
+						const link = match[1];
+						const promptFile = md.getFirstLinkpathDest(link, filePath)
+						const promptPath = promptFile.path;
+						fm.sysprompt = vaultPath + "/" + promptPath;
+					}
+				}
+
+				const opts = this.toEdn(fm);
+
+				const expr = `(obsidian-ai.core/chat-doc! "${vaultPath}" "${filePath}" ${opts})`;
+
+				this.eval(expr);
+			}
+		});
+
+
+		this.addCommand({
+			id: 'octo-chat-doc',
+			name: 'Octopus Chat Doc',
+			callback: () => {
+
+				const file = this.app.workspace.getActiveFile();
+
+				if (! file) {
+					return;
+				}
+
+				const fileName = file.name.replace(/\..*?$/, '')
+
+				const expr = `(octopus.md/chat-doc! "${fileName}")`;
+
+				console.log(expr);
+
+				this.eval(expr);
+			}
+		});
+
+
+		this.addCommand({
+			id: 'octo-chat-doc-inverse',
+			name: 'Octopus Inverse Chat Doc',
+			callback: () => {
+
+				const file = this.app.workspace.getActiveFile();
+
+				if (! file) {
+					return;
+				}
+
+				const fileName = file.name.replace(/\..*?$/, '')
+
+				const expr = `(octopus.md/chat-doc-inverse! "${fileName}")`;
+
+				console.log(expr);
+
+				this.eval(expr);
+			}
+		});
+
+
+
+		this.addCommand({
+			id: 'gen-image',
+			name: 'Generate Image',
+			callback: () => {
+
+				const file = this.app.workspace.getActiveFile();
+
+				if (! file) {
+					return;
+				}
+
+				const vaultPath = (this.app.vault.adapter as any).basePath;
+				const filePath = file.path;
+				const md = this.app.metadataCache;
+
+				const fm = md.getFileCache(file).frontmatter;
+
+				fm['model'] = fm['image-model'];
+				delete fm['image-model'];
+
+				const opts = this.toEdn(fm);
+
+				const expr = `(obsidian-ai.core/gen-image! "${vaultPath}" "${filePath}" ${opts})`;
+
+				console.log(expr);
+
+				this.eval(expr);
+			}
+		});
+
+
+
+		this.addCommand({
+			id: 'nrepl-eval',
+			name: 'nREPL Eval',
+			callback: () => {
+
+				const editor = this.app.workspace.activeEditor;
+				const expr = editor?.editor?.getSelection();
+
+				if (expr) {
+					this.eval(expr, (r:string) => {
+						new Notice(r);
+					});
 				}
 			}
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+		// This adds a settings tab so the user can configure various aspects of the plugin
+		this.addSettingTab(new ObsidianNreplSettingTab(this.app, this));
+
 
 		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		// this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+	}
+
+	toEdn(obj:any) {
+
+		let json:string = JSON.stringify(obj);
+		return json.replaceAll(":", " ");
+	}
+
+
+	getClient() {
+
+		if (this._client) {
+			return this._client;
+		}
+
+		let client = require('nrepl-client').connect({port: this.settings.port, host: '127.0.0.1'});
+		client.setKeepAlive(true, 30000);
+		console.log(client);
+		this._client = client;
+
+
+		return this._client;
+	}
+
+	eval(expr:string, callback?:Function) {
+
+		let client:any = this.getClient();
+
+		client.eval(expr, function(err, result) {
+			console.log('%s => ', expr, err || result[0].value);
+			if (!err && callback) {
+				callback(result[0].value);
+			}
+		});
 	}
 
 	onunload() {
@@ -91,26 +218,11 @@ export default class MyPlugin extends Plugin {
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+class ObsidianNreplSettingTab extends PluginSettingTab {
+	plugin: ObsidianNrepl;
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: ObsidianNrepl) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -121,13 +233,13 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+			.setName('nREPL Port')
+			.setDesc('')
+			.addText(port => port
+				.setPlaceholder('Enter nREPL port')
+				.setValue(this.plugin.settings.port)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.port = value;
 					await this.plugin.saveSettings();
 				}));
 	}
